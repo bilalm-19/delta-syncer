@@ -5,7 +5,7 @@ from watchdog.events import FileSystemEventHandler
 
 import sqlite3
 
-from state_db import (
+from .state_db import (
     DB_PATH,
     init_db,
     is_sync_needed,

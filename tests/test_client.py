@@ -9,11 +9,11 @@ from watchdog.events import (
     DirDeletedEvent,
     DirMovedEvent,
 )
+
 from client.state_db import init_db, get_file_state, update_file_state
 from client.client import SyncHandler, handle_file_change, reconcile
-
 # Note: I generated these tests using Claude
-# use via python -m pytest tests/test_state_db.py -v
+# use via python -m pytest tests/test_client.py -v
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
