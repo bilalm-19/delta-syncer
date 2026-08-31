@@ -90,12 +90,3 @@ def chunk_file(filepath, chunk_sz=None):
         "chunk_size": chunk_sz,
         "records":     records,
     }
- 
-
-
-
-
-    
-
-
-
