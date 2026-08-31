@@ -88,5 +88,6 @@ def chunk_file(filepath, chunk_sz=None):
         "size":       file_size,
         "sha256":     file_hasher.hexdigest(), # hash of the entire file
         "chunk_size": chunk_sz,
-        "records":     records,
+        "records":    records,
     }
+
