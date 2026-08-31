@@ -15,6 +15,16 @@ from .state_db import (
     rename_file_state,
     rename_dir_state,
 )
+
+from common.chunker import chunk_file, yield_records
+from server.server import (
+    init_db as server_init_db,
+    get_needed_chunks,
+    receive_chunk,
+    reassemble_file,
+    finalise_sync,
+    DB_PATH as SERVER_DB_PATH,
+)
 # ----------
 # Fallback: polling-based observer for filesystems where event-driven monitoring is unavailable
 # (e.g. Windows drives mounted in WSL via /mnt/c/)
@@ -30,16 +40,44 @@ POLL_INTERVAL = 30 # seconds between periodic scans
 
 # ------------------------ HELPERS --------------------
 
-def sync_file(filepath):
-    """Placeholder for the 'transport layer'"""
+def sync_file(server_conn, filepath, watch_root):
+    """Chunk a changed file and sync only the delta to the server."""
 
-    print(f"[SYNCING] {filepath} - placeholder")
+    # Strips the 'watch_root' path from the absolute path
+    # so the server mirrors the directory structure
+    rel_path = os.path.relpath(filepath, watch_root)
+
+    # 1. CHUNK THE FILE
+    result = chunk_file(filepath)
+    client_records = result["records"]
+
+    # 2. Ask the server which chunks it needs (i.e. the ones where the hash didnt match)
+    needed = get_needed_chunks(server_conn, rel_path, client_records)
+
+    # 3. Send the needed chunks only
+    with open(filepath, "rb") as fh:
+        for record, data in yield_records(fh, result["chunk_size"]):
+            if record["index"] in needed:
+                accepted = receive_chunk(rel_path, record["index"], data, record["sha256"])
+                if not accepted:
+                    print(f"[REJECTED] {rel_path} chunk {record['index']} — hash mismatch")
+                    return
+
+    # 4. Reassemble and verify whole-file hash
+    if needed:
+        if not reassemble_file(server_conn, rel_path, len(client_records), result["sha256"]):
+            print(f"[FAILED] {rel_path} — whole-file hash mismatch after reassembly")
+            return            
+
+    # 5. Update Server Records
+    finalise_sync(server_conn, rel_path, client_records, result["sha256"], result["chunk_size"])
+    print(f"[SYNCED] {rel_path}")
 
 
-def handle_file_change(conn, filepath):
+def handle_file_change(conn, server_conn, filepath, watch_root):
     """Check if a file needs syncing, and if so, sync it and record the new state"""
     if is_sync_needed(conn, filepath):
-        sync_file(filepath)
+        sync_file(server_conn, filepath, watch_root)
         result = update_file_state(conn, filepath)
         if result is None:
             print(f"[UNSTABLE] {filepath} - file changed during hashing, will retry later")
@@ -56,12 +94,13 @@ class SyncHandler(FileSystemEventHandler): # Inherits the FileSystemEventHandler
     # The observer is designed to monitor for changes and trigger the appropriate event handlers.
     # https://pythonhosted.org/watchdog/api.html
 
-    def __init__(self, conn, watch_root):
+    def __init__(self, conn, server_conn, watch_root):
         super().__init__() # run the parent class (FileSystemEventHandler setup first)
         # self is the instance being created
         # conn and watch_root are args passed in by caller (i.e. DB connection and dir path)
         self.conn = conn
         self.watch_root = os.path.abspath(watch_root)
+        self.server_conn = server_conn
 
     def in_watch_root(self, path):
         """True if path is inside (or equal to) the watched directory."""
@@ -84,7 +123,7 @@ class SyncHandler(FileSystemEventHandler): # Inherits the FileSystemEventHandler
             return
         try:
             print(f"[FILE CREATED] {event.src_path}")
-            handle_file_change(self.conn, event.src_path)
+            handle_file_change(self.conn, self.server_conn, event.src_path, self.watch_root)
         except Exception as e:
             print(f"[ERROR] on_created: {event.src_path} - {e}")
 
@@ -107,7 +146,7 @@ class SyncHandler(FileSystemEventHandler): # Inherits the FileSystemEventHandler
             return
         try:
             print(f"[FILE MODIFIED] {event.src_path}")
-            handle_file_change(self.conn, event.src_path)
+            handle_file_change(self.conn, self.server_conn, event.src_path, self.watch_root)
         except Exception as e:
             print(f"[ERROR] on_modified: {event.src_path} - {e}")
 
@@ -148,7 +187,7 @@ class SyncHandler(FileSystemEventHandler): # Inherits the FileSystemEventHandler
 
 # --------RECONCILIATION--------------------------------
 
-def reconcile(conn, watch_root):
+def reconcile(conn, server_conn, watch_root):
     """Walk the watched dir and update respectively to consider changes while the client was offline"""
 
     print("[RECONCILE] Starting scan...")
@@ -159,7 +198,7 @@ def reconcile(conn, watch_root):
         for fname in filenames:
             filepath = os.path.join(dirpath, fname)
             try:
-                handle_file_change(conn, filepath)
+                handle_file_change(conn, server_conn, filepath, watch_root)
             except Exception as e:
                 print(f"[RECONCILE ERROR] {filepath} - {e}")
 
@@ -184,17 +223,18 @@ def main():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     init_db(conn)
 
+    server_conn = sqlite3.connect(SERVER_DB_PATH, check_same_thread=False)
+    server_init_db(server_conn)
 
     # Run reconciliation to catch any changes while client was offline
-    reconcile(conn, CLIENT_DIR)
+    reconcile(conn, server_conn, CLIENT_DIR)
 
     # FILE SYSTEM WATCHER
-
 
     observer = Observer() # Creating an observer object that will monitor the filesystem for changes
     # observer = PollingObserver(timeout=2) # fall back - polling
     
-    observer.schedule(SyncHandler(conn, CLIENT_DIR), CLIENT_DIR, recursive=True) # Scheduling the observer to monitor the CLIENT_DIR (recursively to consider subdirs) and handle events with SyncHandler
+    observer.schedule(SyncHandler(conn, server_conn, CLIENT_DIR), CLIENT_DIR, recursive=True) # Scheduling the observer to monitor the CLIENT_DIR (recursively to consider subdirs) and handle events with SyncHandler
     observer.start() # Starts the observer (in a separate thread, to not block main script execution)
     print(f"WATCHING: {CLIENT_DIR} for changes...")
 
@@ -205,7 +245,7 @@ def main():
 
             # Periodic Polling
             if time.time() - last_poll >= POLL_INTERVAL:
-                reconcile(conn, CLIENT_DIR)
+                reconcile(conn, server_conn, CLIENT_DIR)
                 last_poll = time.time()
     except KeyboardInterrupt:
         print("STOPPED WATCHING, exiting program...")
@@ -213,6 +253,7 @@ def main():
 
     observer.join() # Wait for the observer thread to finish before exiting the program
     conn.close()
+    server_conn.close()
 
 if __name__ == "__main__":
     main() # Run main function when script executed directly
