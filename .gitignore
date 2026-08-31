@@ -1,2 +1,8 @@
 .venv*/
-__pycache__/
+__pycache__/client/client_dir/
+*.db
+server/backup_dir/
+client/client_dir/
+*.db
+server/backup_dir/*
+!server/backup_dir/.gitkeep
