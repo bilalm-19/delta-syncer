@@ -2,7 +2,6 @@ import os
 import sqlite3
 import hashlib
 
-
 from common.chunker import compare_chunk, hash_bytes
 from common.manifest import compare_records
 
@@ -44,7 +43,7 @@ def get_needed_chunks(conn, filepath, client_records):
     """Compare the passed in client's chunk records against the stored record and return the indices of the chunks needed"""
 
     cursor = conn.execute(
-        "SELECT idx, sha256 FROM chunk_records_tbl where pth = ? ORDER BY idx",
+        "SELECT idx, sha256 FROM chunk_records_tbl where path = ? ORDER BY idx",
         (filepath,)
     )
 
@@ -54,6 +53,7 @@ def get_needed_chunks(conn, filepath, client_records):
 
 
 def receive_chunk(filepath, chunk_index, data, client_chunk_sha256):
+    "Verify and stage a recieved chunk - returns True if accepted"
     if not compare_chunk(data, client_chunk_sha256):
         return False
 
@@ -76,27 +76,49 @@ def reassemble_file(conn, filepath, num_chunks, client_file_sha256):
     file_staging_dir = os.path.join(STAGING_DIR, filepath)
 
     # The path where the backup copy (i.e. the last saved sync) is
-    output_path = os.path.join(BACKUP_DIR, filepath)
+    output_path = os.path.join(BACKUP_DIR, filepath) # just a string
+
+    os.makedirs(os.path.dirname(output_path), exist_ok=True) # create subdirs of the path
+
+    # Read existing backup so we can see what existing data we have
+    # (so we can grab unchanged chunks to use during reassembly)
+    existing_data = b""
+    if os.path.exists(output_path):
+        with open(output_path, "rb") as f:
+            existing_data = f.read()
+
+    # get the old chunk size so we know how to slice the existing file
+    cursor = conn.execute(
+    "SELECT chunk_size FROM file_info_tbl WHERE path = ?", (filepath,))
+    row = cursor.fetchone()
+    old_chunk_size = row[0] if row else None
 
     file_hasher = hashlib.sha256()
-
-    with open(output_path, "wb") as out:
-        for i in range(num_chunks):
+    with open(output_path + ".tmp", "wb") as out:    
+        for i in range(num_chunks):   
             # e.g. file_staging_dir = "/tmp/staging" and i = 3
-            # gives us /tmp/staging/3
-            chunk_path = os.path.join(file_staging_dir, str(i))
+            # gives us /tmp/staging/3           
+            staged_chunk = os.path.join(file_staging_dir, str(i))
 
-            with open(chunk_path, "rb") as chunk_file:
-                data = chunk_file.read()
-                out.write(data)
-                file_hasher.update(data) # to feed the data to get hashed, piece by piece (avoid loading entire file at once)
+            if os.path.exists(staged_chunk): # if chunk exists in staging, its a chunk the client just sent (new/changed)
+                with open(staged_chunk, "rb") as f:
+                    data = f.read()
+            elif old_chunk_size and existing_data: # if not in staging, grab from backup file instead
+                start = i * old_chunk_size
+                data = existing_data[start:start + old_chunk_size]
+            else:
+                return False
+
+            out.write(data)
+            file_hasher.update(data)  # to feed the data to get hashed, piece by piece (avoid loading entire file at once)
 
     if file_hasher.hexdigest() != client_file_sha256:
         # reassembled hash mismatches client's file hash
         # i.e. reassembled file is corrupt
-        os.remove(output_path)
+        os.remove(output_path + ".tmp")
         return False
-
+    
+    os.replace(output_path + ".tmp", output_path) # replace the old file with the new, reassembled, file that matches the hash from the client
     return True
 
 def finalise_sync(conn, filepath, client_records, file_sha256, chunk_size):
