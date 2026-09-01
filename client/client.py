@@ -56,12 +56,13 @@ def sync_file(server_conn, filepath, watch_root):
 
     # 3. Send the needed chunks only
     with open(filepath, "rb") as fh:
-        for record, data in yield_records(fh, result["chunk_size"]):
-            if record["index"] in needed:
-                accepted = receive_chunk(rel_path, record["index"], data, record["sha256"])
-                if not accepted:
-                    print(f"[REJECTED] {rel_path} chunk {record['index']} — hash mismatch")
-                    return
+        for idx in needed:
+            fh.seek(idx * result["chunk_size"])
+            data = fh.read(result["chunk_size"])
+            accepted = receive_chunk(rel_path, idx, data, result["records"][idx]["sha256"])
+            if not accepted:
+                print(f"[REJECTED] {rel_path} chunk {idx} — hash mismatch")
+                return
 
     # 4. Reassemble and verify whole-file hash
     if needed:
