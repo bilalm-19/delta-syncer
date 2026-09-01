@@ -1,7 +1,7 @@
 # delta-syncer
 
 A **file synchronisation utility** that monitors a given directory and syncs changes to a remote server using **delta sync**.
-Built for **bandwidth-constrained environments** - only transferring** changed chunks of files**, rather than entire files.
+Built for **bandwidth-constrained environments** - only transferring **changed chunks of files**, rather than entire files.
 
 ## Project Structure
 
