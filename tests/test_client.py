@@ -12,6 +12,8 @@ from watchdog.events import (
 
 from client.state_db import init_db, get_file_state, update_file_state
 from client.client import SyncHandler, handle_file_change, reconcile
+from server.server import init_db as server_init_db, DB_PATH as SERVER_DB_PATH
+
 # Note: I generated these tests using Claude
 # use via python -m pytest tests/test_client.py -v
 # ---------------------------------------------------------------------------
@@ -25,6 +27,12 @@ def conn():
     init_db(c)
     return c
 
+@pytest.fixture
+def server_conn():
+    """In-memory SQLite connection for the server DB."""
+    c = sqlite3.connect(":memory:")
+    server_init_db(c)
+    return c
 
 @pytest.fixture
 def watch_dir(tmp_path):
@@ -35,10 +43,9 @@ def watch_dir(tmp_path):
 
 
 @pytest.fixture
-def handler(conn, watch_dir):
+def handler(conn, server_conn, watch_dir):
     """A SyncHandler wired to the in-memory DB and temp watch dir."""
-    return SyncHandler(conn, str(watch_dir))
-
+    return SyncHandler(conn, server_conn, str(watch_dir))
 
 # ---------------------------------------------------------------------------
 # in_watch_root
@@ -64,25 +71,25 @@ def test_in_watch_root_itself(handler, watch_dir):
 # handle_file_change
 # ---------------------------------------------------------------------------
 
-def test_handle_file_change_new_file(conn, watch_dir):
+def test_handle_file_change_new_file(conn, server_conn, watch_dir):
     """A new file should be synced and tracked in the DB."""
     f = watch_dir / "new.txt"
     f.write_text("content")
 
-    handle_file_change(conn, str(f))
+    handle_file_change(conn, server_conn, str(f), str(watch_dir))
 
     assert get_file_state(conn, str(f)) is not None
 
 
-def test_handle_file_change_unchanged(conn, watch_dir):
+def test_handle_file_change_unchanged(conn, server_conn, watch_dir):
     """An unchanged file should not update the DB again."""
     f = watch_dir / "same.txt"
     f.write_text("content")
 
-    handle_file_change(conn, str(f))
+    handle_file_change(conn, server_conn, str(f), str(watch_dir))
     state_before = get_file_state(conn, str(f))
 
-    handle_file_change(conn, str(f))
+    handle_file_change(conn, server_conn, str(f), str(watch_dir))
     state_after = get_file_state(conn, str(f))
 
     assert state_before == state_after
@@ -243,17 +250,17 @@ def test_on_moved_dir_outside(handler, conn, watch_dir, tmp_path):
 # reconcile
 # ---------------------------------------------------------------------------
 
-def test_reconcile_picks_up_new_files(conn, watch_dir):
+def test_reconcile_picks_up_new_files(conn, server_conn, watch_dir):
     """Files on disk but not in the DB should be tracked after reconcile."""
     f = watch_dir / "untracked.txt"
     f.write_text("new")
 
-    reconcile(conn, str(watch_dir))
+    reconcile(conn, server_conn, str(watch_dir))
 
     assert get_file_state(conn, str(f)) is not None
 
 
-def test_reconcile_prunes_stale_records(conn, watch_dir):
+def test_reconcile_prunes_stale_records(conn, server_conn, watch_dir):
     """DB records for deleted files should be removed after reconcile."""
     f = watch_dir / "temp.txt"
     f.write_text("data")
@@ -262,6 +269,6 @@ def test_reconcile_prunes_stale_records(conn, watch_dir):
     # Delete the file but leave the DB record
     os.remove(str(f))
 
-    reconcile(conn, str(watch_dir))
+    reconcile(conn, server_conn, str(watch_dir))
 
     assert get_file_state(conn, str(f)) is None
