@@ -42,16 +42,10 @@ def decide_chunk_sz(file_size, min_sz=MIN_CHUNK_SIZE, max_sz=MAX_CHUNK_SIZE):
 def yield_records(fileobj, chunk_sz):
     """Read fileobj in chunk_sz pieces, yielding (record, raw_bytes) for each
     
-    Each record is a plain dict:  {"index": int, "offset": int, "length": int, "sha256": str}
-
-    Final chunk may be shorter than chunk_sz. Length is stored so the server can read the
-    correct number of bytes
-    
+    Each record is a plain dict:  {"index": int, "sha256": str}    
     """
 
     index = 0 # which chunk it is
-    offset = 0 # where in the file that chunk starts
-
     while True:
         data = fileobj.read(chunk_sz)
         if not data:
@@ -59,13 +53,10 @@ def yield_records(fileobj, chunk_sz):
 
         record ={
             "index": index,
-            "offset": offset,
-            "length": len(data),
             "sha256": hash_bytes(data),
         }
         yield record, data
 
-        offset += len(data)
         index += 1
 
 def chunk_file(filepath, chunk_sz=None):
