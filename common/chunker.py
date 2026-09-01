@@ -60,7 +60,7 @@ def yield_records(fileobj, chunk_sz):
         index += 1
 
 def chunk_file(filepath, chunk_sz=None):
-    """Chunk a file and return the chunks / records for the client"""
+    """Chunk a file and return the chunk info and records for the client"""
 
     file_size = os.path.getsize(filepath)
  
@@ -76,7 +76,6 @@ def chunk_file(filepath, chunk_sz=None):
             file_hasher.update(data)
  
     return {
-        "size":       file_size,
         "sha256":     file_hasher.hexdigest(), # hash of the entire file
         "chunk_size": chunk_sz,
         "records":    records,
