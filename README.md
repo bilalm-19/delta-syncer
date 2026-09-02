@@ -10,17 +10,14 @@ In another terminal -  copy or create files in `client/client_dir/`:
 ```
 # Create a test file
 echo "hello" > client/client_dir/test.txt
-
-# Create a larger binary file
-dd if=/dev/urandom of=client/client_dir/big.bin bs=1M count=5
 ```
 The client detects the change, chunks the file, sends only the needed chunks to the server, and the server reassembles the file in `server/backup_dir/`.
 
 ### Verifying integrity
 ```bash
-sha256sum client/client_dir/big.bin server/backup_dir/big.bin
+sha256sum client/client_dir/test.txt server/backup_dir/test.txt
 ```
-Both hashes should match - confirming the file was transferred and reassembled correctly.
+Both hashes should match - confirming the file was transferred correctly.
 
 ## Project Structure
 
