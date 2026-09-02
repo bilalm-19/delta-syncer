@@ -11,7 +11,6 @@ In another terminal -  copy or create files in `client/client_dir/`:
 # Create a test file
 echo "hello" > client/client_dir/test.txt
 ```
-The client detects the change, chunks the file, sends only the needed chunks to the server, and the server reassembles the file in `server/backup_dir/`.
 
 ### Verifying integrity
 ```bash
