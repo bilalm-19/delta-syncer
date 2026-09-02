@@ -3,6 +3,25 @@
 A **file synchronisation utility** that monitors a given directory and syncs changes to a remote server using **delta sync**.
 Built for **bandwidth-constrained environments** - only transferring **changed chunks of files**, rather than entire files.
 
+## DEMO
+Open a terminal and start the client `python -m client.client`
+
+In another terminal -  copy or create files in `client/client_dir/`:
+```
+# Create a test file
+echo "hello" > client/client_dir/test.txt
+
+# Create a larger binary file
+dd if=/dev/urandom of=client/client_dir/big.bin bs=1M count=5
+```
+The client detects the change, chunks the file, sends only the needed chunks to the server, and the server reassembles the file in `server/backup_dir/`.
+
+### Verifying integrity
+```bash
+sha256sum client/client_dir/big.bin server/backup_dir/big.bin
+```
+Both hashes should match - confirming the file was transferred and reassembled correctly.
+
 ## Project Structure
 
 ### `common/chunker.py`
@@ -13,6 +32,7 @@ The core chunking module used by both client and server.
 - `chunk_file()` - called by the client before syncing. It returns a manifest: whole-file SHA-256, chunk size, and a list of chunk records (index, hash). The client sends this manifest to the server so it can determine which chunks it needs (avoiding unnecessary sends over the wire)
   - whole-file SHA-256 - After reassembly, the server computes the SHA-256 of the complete file and compares it against this hash to verify the reassembled file is an exact copy of the client's
   - `chunk_size` - the server needs to slice unchanged chunks from the existing backup during reassembly (so it can insert the changed chunks in between). Without it, the server would not know the boundaries of the chunks in the old file
+  - Record:
     - `index` identifies WHICH NUMBER chunk of the file it is (e.g. 0, 1, 2, ...). The server needs this to know which chunk is being compared
     - `sha256` the HASH of THAT chunk's bytes
       - used by the server to check if the chunk in question differs from its respective one on the server (to determine if the chunk needs to be sent)
@@ -59,23 +79,4 @@ Unit tests for the client module (state_db + client event handlers).
     - when the server tries to match hashes of chunks, they no longer do, so all chunks are resent
     - then, during reassembly, since chunk size changed, all chunks are new, and the old chunk size isnt used
 - For filesystems where event-driven monitoring is unavailable (e.g. Windows drives mounted in WSL via /mnt/c/), changes are noticed through polling only
-  
-## DEMO
-Open a terminal and start the client `python -m client.client`
-
-In another terminal -  copy or create files in `client/client_dir/`:
-```
-# Create a test file
-echo "hello" > client/client_dir/test.txt
-
-# Create a larger binary file
-dd if=/dev/urandom of=client/client_dir/big.bin bs=1M count=5
-```
-The client detects the change, chunks the file, sends only the needed chunks to the server, and the server reassembles the file in `server/backup_dir/`.
-
-### Verifying integrity
-```bash
-sha256sum client/client_dir/big.bin server/backup_dir/big.bin
-```
-Both hashes should match - confirming the file was transferred and reassembled correctly.
 
